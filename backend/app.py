@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+from huggingface_hub import create_bucket, bucket_info, login
 
 # Load environment variables
 load_dotenv()
@@ -15,6 +16,15 @@ CORS(app)
 PORT = int(os.getenv('PORT', 5000))
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 ALLOWED_EXTENSIONS = {'mp4', 'mov', 'avi', 'wmv', 'mkv'}
+HF_TOKEN = os.getenv('HF_TOKEN')
+
+# Authenticate with Hugging Face if token is provided
+if HF_TOKEN:
+    try:
+        login(token=HF_TOKEN)
+        print("Authenticated with Hugging Face")
+    except Exception as e:
+        print(f"Authentication failed: {e}")
 
 # Ensure upload directory exists
 if not os.path.exists(UPLOAD_FOLDER):
@@ -26,60 +36,79 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/')
-def health_check():
-    return "Backend is running! (Python/Flask)"
+@app.route('/api/bucket/create', methods=['POST'])
+def create_hf_bucket():
+    """
+    Endpoint to create a Hugging Face Storage Bucket.
+    Expects JSON: { "bucket_name": "string", "private": boolean, "region": "string" }
+    """
+    if not HF_TOKEN:
+        return jsonify({"message": "HF_TOKEN not configured in environment"}), 500
 
-@app.route('/api/upload', methods=['POST'])
-def upload_file():
-    if 'video' not in request.files:
-        return jsonify({"message": "No file uploaded"}), 400
-    
-    file = request.files['video']
-    
-    if file.filename == '':
-        return jsonify({"message": "No file selected"}), 400
-    
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        # Add timestamp to avoid collisions
-        unique_filename = f"{int(time.time())}-{filename}"
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-        file.save(file_path)
+    data = request.json or {}
+    bucket_name = data.get('bucket_name')
+    is_private = data.get('private', False)
+    region = data.get('region')
+
+    if not bucket_name:
+        return jsonify({"message": "bucket_name is required"}), 400
+
+    try:
+        # Create the bucket using huggingface_hub
+        # exist_ok=True prevents error if bucket already exists
+        url = create_bucket(
+            bucket_name, 
+            private=is_private, 
+            region=region, 
+            exist_ok=True
+        )
         
         return jsonify({
-            "message": "Video uploaded successfully",
-            "file": {
-                "name": filename,
-                "url": f"/uploads/{unique_filename}"
-            }
+            "message": "Bucket created or already exists",
+            "bucket_id": url.bucket_id,
+            "uri": url.uri.to_uri(),
+            "url": str(url)
         }), 200
-    
-    return jsonify({"message": "Only videos are allowed!"}), 400
-
-@app.route('/api/videos', methods=['GET'])
-def get_videos():
-    try:
-        files = os.listdir(app.config['UPLOAD_FOLDER'])
-        videos = []
-        for file in files:
-            # Reconstruct original name by removing timestamp prefix
-            # split('-', 1) handles filenames with hyphens correctly
-            parts = file.split('-', 1)
-            original_name = parts[1] if len(parts) > 1 else file
-            
-            videos.append({
-                "id": file,
-                "name": original_name,
-                "url": f"/uploads/{file}"
-            })
-        return jsonify(videos), 200
+        
     except Exception as e:
-        return jsonify({"message": "Unable to scan files"}), 500
+        print(f"Error creating bucket: {e}")
+        return jsonify({"message": f"Failed to create bucket: {str(e)}"}), 500
 
-@app.route('/uploads/<path:filename>')
-def serve_uploads(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+@app.route('/api/bucket/info', methods=['GET'])
+def get_bucket_info():
+    """
+    Endpoint to get metadata about a Hugging Face Storage Bucket.
+    Expects query parameter: ?bucket_id=username/bucket-name
+    """
+    if not HF_TOKEN:
+        return jsonify({"message": "HF_TOKEN not configured in environment"}), 500
+
+    bucket_id = request.args.get('bucket_id')
+
+    if not bucket_id:
+        return jsonify({"message": "bucket_id is required as a query parameter"}), 400
+
+    try:
+        info = bucket_info(bucket_id)
+        
+        return jsonify({
+            "id": info.id,
+            "private": info.private,
+            "created_at": info.created_at.isoformat() if info.created_at else None,
+            "size": info.size,
+            "total_files": info.total_files
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting bucket info: {e}")
+        return jsonify({"message": f"Failed to get bucket info: {str(e)}"}), 500
+
+@app.route('/')
+def health_check():
+    return jsonify({
+        "status": "running",
+        "hf_authenticated": bool(HF_TOKEN)
+    })
 
 if __name__ == '__main__':
     print(f"Server is running on port {PORT}")
