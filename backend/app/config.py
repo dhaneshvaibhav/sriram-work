@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     PORT = int(os.getenv('PORT', 5000))
     UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'uploads')
-    ALLOWED_EXTENSIONS = {'mp4', 'mov', 'avi', 'wmv', 'mkv'}
+    ALLOWED_EXTENSIONS = {'*'}  # Allow all extensions
     HF_TOKEN = os.getenv('HF_TOKEN')
 
     @staticmethod
