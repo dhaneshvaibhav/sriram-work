@@ -2,174 +2,479 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useDropzone } from 'react-dropzone';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Upload, Video, CheckCircle, AlertCircle, Play, Home, Info, Heart } from 'lucide-react';
+import { 
+  Upload, 
+  Database, 
+  Folder, 
+  Trash2, 
+  Plus, 
+  Info, 
+  CheckCircle, 
+  AlertCircle, 
+  Loader2, 
+  ExternalLink,
+  ChevronRight
+} from 'lucide-react';
 import './index.css';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+// --- Shared Components ---
 
 const Navbar = () => {
   const location = useLocation();
-  
+  const [authStatus, setAuthStatus] = useState({ loading: true, authenticated: false });
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/`);
+        setAuthStatus({ loading: false, authenticated: response.data.hf_authenticated });
+      } catch (error) {
+        console.error('Health check failed:', error);
+        setAuthStatus({ loading: false, authenticated: false });
+      }
+    };
+    checkAuth();
+  }, []);
+
   return (
     <nav className="navbar">
-      <Link to="/" className="nav-logo">
-        <Video size={28} />
-        <span>EduVault</span>
-      </Link>
+      <div style={{display: 'flex', alignItems: 'center', gap: '2rem'}}>
+        <Link to="/" className="nav-logo">
+          <Database size={28} />
+          <span>EduVault HF</span>
+        </Link>
+        <div className="auth-badge">
+          {authStatus.loading ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : authStatus.authenticated ? (
+            <div className="badge-success"><CheckCircle size={14} /> HF Connected</div>
+          ) : (
+            <div className="badge-error"><AlertCircle size={14} /> HF Disconnected</div>
+          )}
+        </div>
+      </div>
       <div className="nav-links">
         <Link to="/" className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}>
-          <Upload size={18} style={{ marginRight: '4px' }} />
-          Upload
+          <Database size={18} /> Buckets
         </Link>
-        <Link to="/library" className={`nav-link ${location.pathname === '/library' ? 'active' : ''}`}>
-          <Play size={18} style={{ marginRight: '4px' }} />
-          Library
+        <Link to="/files" className={`nav-link ${location.pathname === '/files' ? 'active' : ''}`}>
+          <Folder size={18} /> Files
         </Link>
       </div>
     </nav>
   );
 };
 
-const UploadPage = ({ onUploadSuccess }) => {
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [status, setStatus] = useState({ type: '', message: '' });
-
-  const onDrop = useCallback(async (acceptedFiles) => {
-    const file = acceptedFiles[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('video', file);
-
-    setUploading(true);
-    setUploadProgress(0);
-    setStatus({ type: '', message: '' });
-
-    try {
-      await axios.post(`${API_BASE_URL}/api/upload`, formData, {
-        onUploadProgress: (progressEvent) => {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(progress);
-        },
-      });
-
-      setStatus({ type: 'success', message: 'Video uploaded successfully!' });
-      if (onUploadSuccess) onUploadSuccess();
-    } catch (error) {
-      setStatus({ type: 'error', message: error.response?.data?.message || 'Upload failed. Please try again.' });
-    } finally {
-      setUploading(false);
+const StatusMessage = ({ status, setStatus }) => {
+  useEffect(() => {
+    if (status.message) {
+      const timer = setTimeout(() => {
+        setStatus({ type: '', message: '' });
+      }, 5000);
+      return () => clearTimeout(timer);
     }
-  }, [onUploadSuccess]);
+  }, [status, setStatus]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'video/*': ['.mp4', '.mov', '.avi', '.wmv', '.mkv'] },
-    multiple: false
-  });
-
+  if (!status.message) return null;
   return (
-    <div className="page-content">
-      <header className="page-header">
-        <h1>Upload Educational Content</h1>
-        <p>Upload your videos to share knowledge and learn together.</p>
-      </header>
-
-      <div className="upload-card">
-        <div {...getRootProps()} className={`dropzone ${isDragActive ? 'active' : ''}`}>
-          <input {...getInputProps()} />
-          <div className="dropzone-content">
-            <Upload size={64} className="dropzone-icon" />
-            {isDragActive ? (
-              <p>Drop the video here...</p>
-            ) : (
-              <>
-                <p>Drag & drop a video file here, or click to select</p>
-                <span>Supports MP4, MOV, AVI, WMV, MKV</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {uploading && (
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${uploadProgress}%` }}></div>
-          </div>
-        )}
-
-        {status.message && (
-          <div className={`status-message ${status.type}`}>
-            {status.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-            {status.message}
-          </div>
-        )}
-      </div>
+    <div className={`status-message ${status.type}`}>
+      {status.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+      {status.message}
     </div>
   );
 };
 
-const LibraryPage = ({ videos, fetchVideos }) => {
+// --- Bucket Management ---
+
+const BucketManager = () => {
+  const [buckets, setBuckets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [newBucket, setNewBucket] = useState({ name: '', private: true });
+  const [status, setStatus] = useState({ type: '', message: '' });
+  const [selectedInfo, setSelectedInfo] = useState(null);
+
+  const fetchBuckets = async () => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/bucket/list`);
+      setBuckets(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      console.error('Error fetching buckets:', error);
+      setStatus({ type: 'error', message: 'Failed to fetch buckets.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchVideos();
+    fetchBuckets();
   }, []);
+
+  const handleCreateBucket = async (e) => {
+    e.preventDefault();
+    setStatus({ type: '', message: '' });
+    try {
+      await axios.post(`${API_BASE_URL}/api/bucket/create`, {
+        bucket_name: newBucket.name,
+        private: newBucket.private
+      });
+      setStatus({ type: 'success', message: 'Bucket created successfully!' });
+      setNewBucket({ name: '', private: true });
+      fetchBuckets();
+    } catch (error) {
+      setStatus({ type: 'error', message: error.response?.data?.message || 'Failed to create bucket.' });
+    }
+  };
+
+  const viewInfo = async (bucketId) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/bucket/info?bucket_id=${bucketId}`);
+      setSelectedInfo(response.data);
+    } catch (error) {
+      console.error('Error fetching info:', error);
+      alert('Failed to get bucket info');
+    }
+  };
+
+  const handleDeleteBucket = async (bucketId) => {
+    if (!window.confirm(`Are you sure you want to delete bucket ${bucketId}? This action cannot be undone.`)) return;
+    setLoading(true);
+    try {
+      await axios.delete(`${API_BASE_URL}/api/bucket/delete?bucket_id=${bucketId}`);
+      setStatus({ type: 'success', message: `Bucket ${bucketId} deleted successfully.` });
+      fetchBuckets();
+    } catch (error) {
+      console.error('Error deleting bucket:', error);
+      setStatus({ type: 'error', message: error.response?.data?.message || 'Failed to delete bucket.' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="page-content">
       <header className="page-header">
-        <h1>Video Library</h1>
-        <p>Access all uploaded educational videos in one place.</p>
+        <h1>Bucket Management</h1>
+        <p>Manage your Hugging Face Storage Buckets.</p>
       </header>
 
-      {videos.length === 0 ? (
-        <div className="no-videos" style={{ padding: '6rem 2rem' }}>
-          <Video size={64} style={{ marginBottom: '1.5rem', opacity: 0.3 }} />
-          <p>No videos found in the library.</p>
-        </div>
-      ) : (
-        <div className="video-grid">
-          {videos.map((video) => (
-            <div key={video.id} className="video-card">
-              <video className="video-preview" controls>
-                <source src={`${API_BASE_URL}${video.url}`} type="video/mp4" />
-                Your browser does not support the video tag.
-              </video>
-              <div className="video-info">
-                <h3>{video.name}</h3>
-                <p>Educational Video</p>
-              </div>
+      <div className="grid-layout">
+        <section className="card">
+          <h2><Plus size={20} /> Create New Bucket</h2>
+          <form onSubmit={handleCreateBucket} className="form-group">
+            <input 
+              type="text" 
+              placeholder="Bucket Name (e.g. my-awesome-bucket)"
+              value={newBucket.name}
+              onChange={(e) => setNewBucket({...newBucket, name: e.target.value})}
+              required
+            />
+            <label className="checkbox-label">
+              <input 
+                type="checkbox" 
+                checked={newBucket.private}
+                onChange={(e) => setNewBucket({...newBucket, private: e.target.checked})}
+              />
+              Private Bucket
+            </label>
+            <button type="submit" disabled={loading} className="btn-primary">
+              {loading ? <Loader2 className="animate-spin" /> : 'Create Bucket'}
+            </button>
+          </form>
+          <StatusMessage status={status} setStatus={setStatus} />
+        </section>
+
+        <section className="card">
+          <h2><Database size={20} /> Existing Buckets</h2>
+          {loading ? (
+            <div className="loading-state"><Loader2 className="animate-spin" /> Loading buckets...</div>
+          ) : buckets.length === 0 ? (
+            <p className="empty-state">No buckets found.</p>
+          ) : (
+            <ul className="item-list">
+              {buckets.map(bucket => (
+                <li key={bucket.id} className="item">
+                  <div className="item-info">
+                    <strong>{bucket.id}</strong>
+                    <span>{bucket.private ? 'Private' : 'Public'} • {bucket.total_files || 0} files</span>
+                  </div>
+                  <div className="item-actions">
+                    <button onClick={() => viewInfo(bucket.id)} className="btn-icon" title="View Info">
+                      <Info size={18} />
+                    </button>
+                    <button onClick={() => handleDeleteBucket(bucket.id)} className="btn-icon" style={{color: 'var(--error)'}} title="Delete Bucket">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {selectedInfo && (
+        <div className="modal-overlay" onClick={() => setSelectedInfo(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Bucket Details</h3>
+            <div className="info-grid">
+              <p><strong>ID:</strong> {selectedInfo.id}</p>
+              <p><strong>Visibility:</strong> {selectedInfo.private ? 'Private' : 'Public'}</p>
+              <p><strong>Files:</strong> {selectedInfo.total_files}</p>
+              <p><strong>Size:</strong> {(selectedInfo.size / 1024 / 1024).toFixed(2)} MB</p>
+              <p><strong>Created:</strong> {new Date(selectedInfo.created_at).toLocaleDateString()}</p>
             </div>
-          ))}
+            <button onClick={() => setSelectedInfo(null)} className="btn-secondary">Close</button>
+          </div>
         </div>
       )}
     </div>
   );
 };
 
-function App() {
-  const [videos, setVideos] = useState([]);
+// --- File Operations ---
 
-  const fetchVideos = async () => {
+const FileManager = () => {
+  const [buckets, setBuckets] = useState([]);
+  const [selectedBucket, setSelectedBucket] = useState('');
+  const [files, setFiles] = useState([]);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [status, setStatus] = useState({ type: '', message: '' });
+
+  const fetchBuckets = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/videos`);
-      setVideos(response.data);
+      const response = await axios.get(`${API_BASE_URL}/api/bucket/list`);
+      setBuckets(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      console.error('Error fetching videos:', error);
+      console.error('Error fetching buckets:', error);
     }
   };
 
+  const fetchFiles = async (bucketId) => {
+    if (!bucketId) {
+      setFiles([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/file/bucket/list?bucket_id=${bucketId}`);
+      setFiles(Array.isArray(response.data) ? response.data : []);
+      setStatus({ type: 'success', message: `Fetched ${response.data.length} items from ${bucketId}` });
+    } catch (error) {
+      console.error('Error fetching files:', error);
+      setStatus({ type: 'error', message: 'Failed to fetch files from bucket.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBuckets();
+  }, []);
+
+  const onDrop = useCallback((acceptedFiles) => {
+    if (!selectedBucket) {
+      setStatus({ type: 'error', message: 'Please select a bucket first!' });
+      return;
+    }
+    setPendingFiles(prev => [...prev, ...acceptedFiles]);
+    setStatus({ type: '', message: '' });
+  }, [selectedBucket]);
+
+  const handleUpload = async () => {
+    if (pendingFiles.length === 0 || !selectedBucket) return;
+
+    setUploading(true);
+    setStatus({ type: 'info', message: `Uploading ${pendingFiles.length} files...` });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const file of pendingFiles) {
+      const formData = new FormData();
+      formData.append('file', file); 
+      formData.append('bucket_id', selectedBucket);
+
+      try {
+        await axios.post(`${API_BASE_URL}/api/file/upload`, formData);
+        successCount++;
+      } catch (error) {
+        console.error(`Upload error for ${file.name}:`, error);
+        failCount++;
+      }
+    }
+
+    if (failCount === 0) {
+      setStatus({ type: 'success', message: `Successfully uploaded ${successCount} files!` });
+    } else {
+      setStatus({ type: 'error', message: `Uploaded ${successCount} files, but ${failCount} failed.` });
+    }
+
+    setPendingFiles([]);
+    fetchFiles(selectedBucket);
+    setUploading(false);
+  };
+
+  const removePendingFile = (index) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
+    onDrop,
+    multiple: true
+  });
+
+  const handleDelete = async (fileName) => {
+    if (!window.confirm(`Are you sure you want to delete ${fileName} from bucket?`)) return;
+    try {
+      await axios.post(`${API_BASE_URL}/api/file/delete`, {
+        bucket_id: selectedBucket,
+        files: [fileName]
+      });
+      setStatus({ type: 'success', message: `Deleted ${fileName} from bucket` });
+      fetchFiles(selectedBucket);
+    } catch (error) {
+      console.error('Delete error:', error);
+      setStatus({ type: 'error', message: 'Delete failed.' });
+    }
+  };
+
+  return (
+    <div className="page-content">
+      <header className="page-header">
+        <h1>File Operations</h1>
+        <p>Upload and manage files in your buckets.</p>
+      </header>
+
+      <div className="form-group mb-2">
+        <label>Select Bucket</label>
+        <select 
+          value={selectedBucket} 
+          onChange={(e) => {
+            const b = e.target.value;
+            setSelectedBucket(b);
+            fetchFiles(b);
+          }}
+        >
+          <option value="">-- Select a Bucket --</option>
+          {buckets.map(b => <option key={b.id} value={b.id}>{b.id}</option>)}
+        </select>
+      </div>
+
+      <div className="grid-layout">
+        <section className="card">
+          <h2><Upload size={20} /> Upload File</h2>
+          <div {...getRootProps()} className={`dropzone ${isDragActive ? 'active' : ''} ${!selectedBucket ? 'disabled' : ''}`}>
+            <input {...getInputProps()} disabled={!selectedBucket} />
+            <div className="dropzone-content">
+              {uploading ? <Loader2 className="animate-spin" size={48} /> : <Upload size={48} />}
+              <p>{selectedBucket ? 'Drag & drop multiple files here' : 'Select a bucket first'}</p>
+            </div>
+          </div>
+          
+          {pendingFiles.length > 0 && (
+            <div className="pending-file">
+              <div style={{marginBottom: '1rem'}}>
+                <h3 style={{fontSize: '0.9rem', marginBottom: '0.5rem'}}>Pending Files ({pendingFiles.length})</h3>
+                <ul className="item-list" style={{maxHeight: '200px', overflowY: 'auto', background: 'white', borderRadius: '0.5rem', border: '1px solid var(--border-color)'}}>
+                  {pendingFiles.map((file, idx) => (
+                    <li key={idx} className="item" style={{padding: '0.5rem 0.75rem'}}>
+                      <div className="item-info">
+                        <span style={{fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 500}}>{file.name}</span>
+                        <span style={{fontSize: '0.75rem'}}>{(file.size / 1024).toFixed(2)} KB</span>
+                      </div>
+                      <button 
+                        onClick={() => removePendingFile(idx)} 
+                        className="btn-icon" 
+                        style={{color: 'var(--error)'}}
+                        disabled={uploading}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <button 
+                onClick={handleUpload} 
+                disabled={uploading} 
+                className="btn-primary w-full"
+              >
+                {uploading ? <Loader2 className="animate-spin" /> : `Upload ${pendingFiles.length} Files`}
+              </button>
+              <button 
+                onClick={() => setPendingFiles([])} 
+                disabled={uploading} 
+                className="btn-secondary w-full"
+                style={{marginTop: '0.5rem'}}
+              >
+                Clear All
+              </button>
+            </div>
+          )}
+
+          <StatusMessage status={status} setStatus={setStatus} />
+        </section>
+
+        <section className="card">
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem'}}>
+            <h2 style={{margin: 0}}><Folder size={20} /> Bucket Files</h2>
+            {selectedBucket && (
+              <button onClick={() => fetchFiles(selectedBucket)} className="btn-icon" title="Refresh">
+                <Loader2 size={18} className={loading ? 'animate-spin' : ''} />
+              </button>
+            )}
+          </div>
+          
+          {loading ? (
+            <div className="loading-state"><Loader2 className="animate-spin" /> Fetching files...</div>
+          ) : !selectedBucket ? (
+            <p className="empty-state">Select a bucket to view files.</p>
+          ) : files.length === 0 ? (
+            <p className="empty-state">No files found in this bucket.</p>
+          ) : (
+            <ul className="item-list">
+              {files.map((file, idx) => (
+                <li key={idx} className="item">
+                  <div className="item-info">
+                    <strong>{file.path}</strong>
+                    <span>
+                      {file.type === 'file' ? (file.size / 1024).toFixed(2) + ' KB' : 'Directory'} 
+                      {file.last_modified && ` • ${new Date(file.last_modified).toLocaleDateString()}`}
+                    </span>
+                  </div>
+                  <button onClick={() => handleDelete(file.path)} className="btn-icon" style={{color: 'var(--error)'}}>
+                    <Trash2 size={18} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+};
+
+// --- Main App ---
+
+function App() {
   return (
     <BrowserRouter>
       <div className="app">
         <Navbar />
         <main className="app-container">
           <Routes>
-            <Route path="/" element={<UploadPage onUploadSuccess={fetchVideos} />} />
-            <Route path="/library" element={<LibraryPage videos={videos} fetchVideos={fetchVideos} />} />
+            <Route path="/" element={<BucketManager />} />
+            <Route path="/files" element={<FileManager />} />
           </Routes>
         </main>
-        <footer style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-          EduVault &copy; 2026. Empowering through education.
+        <footer className="app-footer">
+          EduVault HF &copy; 2026 • Powered by Hugging Face Storage
         </footer>
       </div>
     </BrowserRouter>

@@ -8,6 +8,8 @@ import time
 file_bp = Blueprint('file', __name__)
 
 def allowed_file(filename):
+    if '*' in Config.ALLOWED_EXTENSIONS:
+        return True
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
 
@@ -15,15 +17,21 @@ def allowed_file(filename):
 def upload_file():
     """
     Endpoint to upload a file locally and optionally to a HF Bucket.
-    Expects multipart/form-data with 'video' file.
+    Expects multipart/form-data with 'file' file field.
     Optional form fields: 'bucket_id', 'path_in_repo'
     """
-    if 'video' not in request.files:
-        return jsonify({"message": "No file uploaded"}), 400
+    if 'file' not in request.files:
+        print("Upload failed: 'file' key not in request.files")
+        return jsonify({"message": "No file uploaded (missing 'file' key)"}), 400
     
-    file = request.files['video']
-    if file.filename == '' or not allowed_file(file.filename):
-        return jsonify({"message": "Invalid file"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        print("Upload failed: Empty filename")
+        return jsonify({"message": "Invalid file: Empty filename"}), 400
+
+    if not allowed_file(file.filename):
+        print(f"Upload failed: File extension not allowed for {file.filename}")
+        return jsonify({"message": f"Invalid file extension. Allowed: {', '.join(Config.ALLOWED_EXTENSIONS)}"}), 400
     
     bucket_id = request.form.get('bucket_id')
     path_in_repo = request.form.get('path_in_repo')
@@ -150,6 +158,29 @@ def download_bucket_files():
 @file_bp.route('/serve/<path:filename>')
 def serve_file(filename):
     return send_from_directory(Config.UPLOAD_FOLDER, filename)
+
+@file_bp.route('/local/delete', methods=['DELETE'])
+def delete_local_file():
+    """
+    Endpoint to delete a file from the local upload folder.
+    Expects query parameter: ?filename=string
+    """
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({"message": "filename is required"}), 400
+    
+    # Security check to prevent path traversal
+    filename = secure_filename(filename)
+    file_path = os.path.join(Config.UPLOAD_FOLDER, filename)
+    
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            return jsonify({"message": f"File {filename} deleted successfully"}), 200
+        except Exception as e:
+            return jsonify({"message": str(e)}), 500
+    else:
+        return jsonify({"message": "File not found"}), 404
 
 @file_bp.route('/delete', methods=['POST'])
 def delete_bucket_files():
