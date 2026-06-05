@@ -6,9 +6,14 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join('backend', '.env'))
 
 def deploy():
+    # Try to get token from env, otherwise prompt the user
     token = os.getenv('HF_TOKEN')
     if not token:
-        print("Error: HF_TOKEN not found in backend/.env")
+        print("HF_TOKEN not found in environment.")
+        token = input("Please enter your Hugging Face Access Token (write permission required): ").strip()
+    
+    if not token:
+        print("Error: No token provided. Deployment aborted.")
         return
 
     api = HfApi(token=token)

@@ -13,7 +13,8 @@ import {
   AlertCircle, 
   Loader2, 
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  Download
 } from 'lucide-react';
 import './index.css';
 
@@ -28,7 +29,7 @@ const Navbar = () => {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const response = await axios.get(`${API_BASE_URL}/`);
+        const response = await axios.get(`${API_BASE_URL}/api/status`);
         setAuthStatus({ loading: false, authenticated: response.data.hf_authenticated });
       } catch (error) {
         console.error('Health check failed:', error);
@@ -296,7 +297,7 @@ const FileManager = () => {
 
     for (const file of pendingFiles) {
       const formData = new FormData();
-      formData.append('file', file); 
+      formData.append('video', file); // Changed from 'file' to 'video' to match backend
       formData.append('bucket_id', selectedBucket);
 
       try {
@@ -340,6 +341,27 @@ const FileManager = () => {
     } catch (error) {
       console.error('Delete error:', error);
       setStatus({ type: 'error', message: 'Delete failed.' });
+    }
+  };
+
+  const handleDownload = async (fileName) => {
+    try {
+      setStatus({ type: 'info', message: `Downloading ${fileName} from bucket...` });
+      
+      // 1. Trigger server-side download from HF Bucket to local 'uploads'
+      await axios.post(`${API_BASE_URL}/api/file/bucket/download`, {
+        bucket_id: selectedBucket,
+        files: [[fileName, fileName]] // repo_path, local_path
+      });
+
+      // 2. Open the local serving URL to download to browser
+      const downloadUrl = `${API_BASE_URL}/api/file/serve/${fileName}`;
+      window.open(downloadUrl, '_blank');
+      
+      setStatus({ type: 'success', message: `Downloaded ${fileName} successfully.` });
+    } catch (error) {
+      console.error('Download error:', error);
+      setStatus({ type: 'error', message: 'Download failed.' });
     }
   };
 
@@ -447,9 +469,16 @@ const FileManager = () => {
                       {file.last_modified && ` • ${new Date(file.last_modified).toLocaleDateString()}`}
                     </span>
                   </div>
-                  <button onClick={() => handleDelete(file.path)} className="btn-icon" style={{color: 'var(--error)'}}>
-                    <Trash2 size={18} />
-                  </button>
+                  <div className="item-actions">
+                    {file.type === 'file' && (
+                      <button onClick={() => handleDownload(file.path)} className="btn-icon" title="Download">
+                        <Download size={18} />
+                      </button>
+                    )}
+                    <button onClick={() => handleDelete(file.path)} className="btn-icon" style={{color: 'var(--error)'}} title="Delete">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>

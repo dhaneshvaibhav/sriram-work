@@ -20,11 +20,12 @@ def upload_file():
     Expects multipart/form-data with 'file' file field.
     Optional form fields: 'bucket_id', 'path_in_repo'
     """
-    if 'file' not in request.files:
-        print("Upload failed: 'file' key not in request.files")
-        return jsonify({"message": "No file uploaded (missing 'file' key)"}), 400
+    print("Received upload request")
+    file = request.files.get('file') or request.files.get('video')
     
-    file = request.files['file']
+    if not file:
+        print("Upload failed: No 'file' or 'video' key in request.files")
+        return jsonify({"message": "No file uploaded (missing 'file' or 'video' key)"}), 400
     if file.filename == '':
         print("Upload failed: Empty filename")
         return jsonify({"message": "Invalid file: Empty filename"}), 400

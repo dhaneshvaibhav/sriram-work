@@ -24,6 +24,13 @@ def create_app():
     app.register_blueprint(bucket_bp, url_prefix='/api/bucket')
     app.register_blueprint(file_bp, url_prefix='/api/file')
     
+    @app.route('/api/status')
+    def health_check():
+        return jsonify({
+            "status": "running",
+            "hf_authenticated": bool(Config.HF_TOKEN)
+        })
+
     @app.route('/')
     def serve_frontend():
         if os.path.exists(os.path.join(app.static_folder, 'index.html')):
